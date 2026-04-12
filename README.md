@@ -83,14 +83,20 @@ Fly app already configured in `fly.toml`. First deploy:
 
 ```bash
 fly apps create coval-a2a-test-agent
-fly deploy
+fly deploy --ha=false
 ```
 
 Subsequent deploys:
 
 ```bash
-fly deploy
+fly deploy --ha=false
 ```
+
+`--ha=false` is important: turn state is stored in an in-memory dict, so all
+three turns of a conversation must hit the same machine. Fly's default HA mode
+spins up a second machine during deploy, which would desync `contextId` →
+`turn_count` mapping across the pair. If you ever see turn 2 reply with the
+turn-1 canned text, run `fly scale count 1 --yes`.
 
 Verify:
 
