@@ -16,12 +16,15 @@ STATIC_TOKEN = "test-token-abc123"
 # contextId -> turn count. In-memory only; Fly machine restart resets state.
 TURN_STATE: dict[str, int] = {}
 
-# One canned reply per turn. Turn 3 flips status.state to "completed" so the
-# simulator's end-state detector fires and the conversation terminates.
+# One canned reply per turn. The final entry flips status.state to "completed"
+# so the simulator's end-state detector fires and the conversation terminates.
 REPLIES: list[tuple[str, str]] = [
     ("Hello! How can I help you today?", "working"),
     ("Got it, let me check on that for you.", "working"),
-    ("All done — is there anything else I can help with?", "completed"),
+    ("I can see there is a reported outage in your area affecting roughly 200 customers. Our engineers are aware and actively working on it.", "working"),
+    ("Current ETA for restoration is within the next two hours. Would you also like me to sign you up for SMS notifications when the outage is resolved?", "working"),
+    ("Done — I've enrolled your number for SMS updates. You'll get a text as soon as service is restored.", "working"),
+    ("All done! Is there anything else I can help you with today?", "completed"),
 ]
 
 
