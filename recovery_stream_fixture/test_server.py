@@ -1,10 +1,15 @@
 """Wire-level checks for the isolated synthetic streaming fixture."""
 
+import hashlib
 import http.client
 import json
+import tempfile
 import threading
 import unittest
+from pathlib import Path
+from unittest import mock
 
+import server
 from server import BoundedServer, Handler, MAX_BODY_BYTES, REPLY_PARTS
 
 
@@ -49,6 +54,39 @@ class StreamingFixtureTests(unittest.TestCase):
 
     def test_reject_transfer_encoding(self):
         self.assertEqual(self.request("POST", "/chat", "{}", {"Transfer-Encoding": "chunked"})[0], 400)
+
+    def test_outbound_private_one_shot_delivery(self):
+        # This fixed test-only value is not a deployed gate token.
+        token = "a" * 64
+        payload = {"phone_number": "+12025550123", "simulation_output_id": "A" * 22}
+        with tempfile.TemporaryDirectory() as directory:
+            gate = Path(directory) / "gate.json"
+            receipt = Path(directory) / "receipt.json"
+            gate.write_text(json.dumps({"sha256": hashlib.sha256(token.encode()).hexdigest(), "expires_at": 9999999999}))
+            gate.chmod(0o600)
+            with mock.patch.object(server, "OUTBOUND_GATE", str(gate)), mock.patch.object(server, "OUTBOUND_RECEIPT", str(receipt)):
+                self.assertEqual(self.request("POST", "/outbound-trigger", json.dumps(payload))[0], 403)
+                self.assertFalse(receipt.exists())
+                self.assertEqual(self.request("POST", "/outbound-trigger", json.dumps(payload), {"X-Coval-Fixture-Token": token})[0], 200)
+                self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(json.loads(receipt.read_text())["simulation_output_id"], payload["simulation_output_id"])
+                self.assertEqual(self.request("GET", "/outbound-receipt.json")[0], 404)
+                self.assertEqual(self.request("POST", "/outbound-trigger", json.dumps(payload), {"X-Coval-Fixture-Token": token})[0], 409)
+
+    def test_outbound_expiry_and_payload_limits(self):
+        token = "b" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            gate = Path(directory) / "gate.json"
+            receipt = Path(directory) / "receipt.json"
+            gate.write_text(json.dumps({"sha256": hashlib.sha256(token.encode()).hexdigest(), "expires_at": 1}))
+            gate.chmod(0o600)
+            with mock.patch.object(server, "OUTBOUND_GATE", str(gate)), mock.patch.object(server, "OUTBOUND_RECEIPT", str(receipt)):
+                headers = {"X-Coval-Fixture-Token": token}
+                self.assertEqual(self.request("POST", "/outbound-trigger", "{}", headers)[0], 403)
+                gate.write_text(json.dumps({"sha256": hashlib.sha256(token.encode()).hexdigest(), "expires_at": 9999999999}))
+                self.assertEqual(self.request("POST", "/outbound-trigger", "{}", headers)[0], 400)
+                self.assertEqual(self.request("POST", "/outbound-trigger", " " * 4097, headers)[0], 413)
+                self.assertFalse(receipt.exists())
 
 
 if __name__ == "__main__":

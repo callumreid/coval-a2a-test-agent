@@ -1,13 +1,20 @@
 """Temporary, synthetic-only SSE fixture. No credentials, input echo or external calls."""
 
+import hashlib
+import hmac
 import json
 import os
+import re
+import stat
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAX_BODY_BYTES = 65536
 REPLY_PARTS = ("Hello! This is a synthetic test. ", "Your test request succeeded. ", "Thank you and goodbye.")
+OUTBOUND_GATE = "/tmp/outbound-gate.json"
+OUTBOUND_RECEIPT = "/tmp/outbound-receipt.json"
+OUTBOUND_LOCK = threading.Lock()
 
 
 class BoundedServer(ThreadingHTTPServer):
@@ -56,6 +63,9 @@ class Handler(BaseHTTPRequestHandler):
         self.empty_response(200 if self.path == "/health" else 404)
 
     def do_POST(self):
+        if self.path == "/outbound-trigger":
+            self.outbound_trigger()
+            return
         if self.path != "/chat":
             self.empty_response(404)
             return
@@ -97,6 +107,60 @@ class Handler(BaseHTTPRequestHandler):
     def emit_event(self, event):
         self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode())
         self.wfile.flush()
+
+    def outbound_trigger(self):
+        # A single internal canary tuple, delivered privately through Fly SSH.
+        # No provider credential or provider call exists in this server.
+        token = self.headers.get("X-Coval-Fixture-Token", "")
+        try:
+            fd = os.open(OUTBOUND_GATE, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd) as f:
+                info = os.fstat(f.fileno())
+                if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
+                    raise ValueError("gate permissions")
+                gate = json.loads(f.read(2048))
+            valid = (re.fullmatch(r"[0-9a-f]{64}", token) is not None
+                     and gate["expires_at"] > time.time()
+                     and hmac.compare_digest(hashlib.sha256(token.encode()).hexdigest(), gate["sha256"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            valid = False
+        if not valid:
+            self.empty_response(403)
+            return
+        if self.headers.get("Transfer-Encoding"):
+            self.empty_response(400)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            self.empty_response(411)
+            return
+        if not 0 < length <= 4096:
+            self.empty_response(413)
+            return
+        try:
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ValueError("incomplete request")
+            payload = json.loads(raw)
+            if (not isinstance(payload, dict) or set(payload) != {"phone_number", "simulation_output_id"}
+                    or not isinstance(payload["phone_number"], str)
+                    or not re.fullmatch(r"\+[1-9][0-9]{7,14}", payload["phone_number"])
+                    or not isinstance(payload["simulation_output_id"], str)
+                    or not re.fullmatch(r"[A-Za-z0-9]{22}", payload["simulation_output_id"])):
+                raise ValueError("invalid tuple")
+        except (ValueError, UnicodeError, RecursionError):
+            self.empty_response(400)
+            return
+        with OUTBOUND_LOCK:
+            try:
+                fd = os.open(OUTBOUND_RECEIPT, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, "w") as f:
+                    json.dump({**payload, "received_at": time.time()}, f)
+            except OSError:
+                self.empty_response(409)
+                return
+        self.empty_response(200)
 
 
 if __name__ == "__main__":
