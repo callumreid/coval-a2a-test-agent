@@ -48,6 +48,10 @@ class StreamingFixtureTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/health")[0], 200)
         self.assertEqual(self.request("POST", "/other", "{}")[0], 404)
 
+    def test_voice_event_sink_has_empty_response(self):
+        status, _content_type, body = self.request("POST", "/vapi-events", '{"message":"synthetic"}')
+        self.assertEqual((status, body), (204, b""))
+
     def test_reject_invalid_or_oversized_request(self):
         self.assertEqual(self.request("POST", "/chat", "not-json")[0], 400)
         self.assertEqual(self.request("POST", "/chat", b" " * (MAX_BODY_BYTES + 1))[0], 413)

@@ -63,6 +63,11 @@ class Handler(BaseHTTPRequestHandler):
         self.empty_response(200 if self.path == "/health" else 404)
 
     def do_POST(self):
+        if self.path == "/vapi-events":
+            # Explicit sink for the isolated one-call assistant: no parsing,
+            # logging, retained body, tools, or external calls.
+            self.empty_response(204)
+            return
         if self.path == "/outbound-trigger":
             self.outbound_trigger()
             return
